@@ -1,0 +1,328 @@
+---
+title: "CUNY DATA 612 Project One Summer 2020"
+author: "John K. Hancock"
+date: "6/3/2020"
+output:
+  html_document:
+    code_download: yes
+    code_folding: hide
+    highlight: pygments
+    number_sections: yes
+    theme: paper
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: no
+ 
+---
+
+```{r, include=FALSE}
+library(reshape2)
+library(tidyr)
+library(caTools)
+library(kableExtra)
+library(rmdformats)
+```
+
+## Movie Recommender System
+
+The following project builds out a Movie recommender system.  The dataset comes from GroupLens, a research lab in the Department of Computer Science and Engineering at the University of Minnesota. [About GroupLens](https://grouplens.org/about/what-is-grouplens/).  GroupLens compiled data from the [MovieLens web site](https://movielens.org/).  A user rated the movies on a scale of 1 to 5. 
+
+## About the Data
+
+```{r, include=FALSE}
+ratings <- read.csv("https://raw.githubusercontent.com/JohnKHancock/raw.github/master/CUNY%20DATA612/ML_Reviews.csv")
+```
+
+For this project, I chose reviews of seven highly popular films. The dataset that I downloaded consists of the following features:
+
+userid : the Id of the user rating the films <br>
+movieid : a unique, numerical identifier for the film <br>
+move title: the title of the film <br>
+user ratins: user ratings on a scale of 1 to 5 <br>
+movie genre(s) : the genres of the films, "Action|Comedy" etc.<br> 
+
+```{r}
+str(ratings)
+```
+
+
+
+## Data Preparation
+
+
+For the purposes of this project, I removed the movieId and genres features. 
+
+
+
+```{r, include=FALSE}
+ratings$genres <- NULL
+ratings$movieId <- NULL
+```
+
+Additionally, the data is in a long format.  I changed it to a wide format so that the form of the dataset is a dense, user-matrix form. 
+
+```{r}
+kable(head(ratings,7), caption = "Long Format") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+```{r, warning=FALSE}
+ratings_wide <- spread(ratings, title, rating)
+colnames(ratings_wide) <- c("UserId", "Braveheart", "Fight_Club", "Forrest_Gump", "Schindler's_List", "Star_Wars_Episode_IV_A_New_Hope", "Toy_Story", "When_Harry_Met_Sally")
+
+kable(head(ratings_wide,5), caption = "Dense, User-Matrix Form") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+```{r}
+dim(ratings_wide)
+```
+I still have 4,155 which is too unruly for this project, so I trimmed it down to 100 users.
+
+
+```{r}
+top_100 <- ratings_wide[1:100,]
+```
+
+
+The last step in data preparation was to randomly assign "NAs" to the data as per project instructions. In the code block below, a random index number is generated between 1 and 100.  
+
+```{r}
+get_Index <-function(){
+        return(floor(runif(1,min=0, max=101)))
+  
+  }
+```
+
+A for loop is created that does 10 iterations that randomly assigns NA values. 
+
+```{r}
+#Randomly assign NA
+set.seed(123)
+for (i in 1:10){
+  top_100$Braveheart[get_Index()] = NA
+  top_100$Fight_Club[get_Index()] = NA
+  top_100$Forrest_Gump[get_Index()] = NA
+  top_100$`Schindler's_List`[get_Index()] = NA
+  top_100$Star_Wars_Episode_IV_A_New_Hope[get_Index()] = NA
+  top_100$Toy_Story[get_Index()] = NA
+  top_100$When_Harry_Met_Sally[get_Index()] = NA
+  
+  
+  
+  
+}
+
+
+
+
+```
+
+
+```{r}
+
+kable(head(top_100,10), caption = "Dense, User-Matrix Form with NAs") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+
+## Break your ratings into separate training and test datasets
+
+The data is split 50-50 into "train" and "test"
+
+```{r}
+#Split the data into Training and Test Set using the caTools package
+set.seed(123)
+sample = sample.split(top_100$UserId, SplitRatio = .5)
+train = subset(top_100, sample == TRUE)
+test  = subset(top_100, sample == FALSE) 
+```
+
+
+```{r}
+dim(train)
+```
+```{r}
+dim(test)
+```
+## Using your training data, calculate the raw average (mean) rating for every user-item combination
+
+### User Averages
+
+```{r}
+user_avg <- rowMeans(train[2:8], na.rm = T)
+user_avg_df <- as.data.frame(user_avg)
+rownames(user_avg_df) <- train$UserId
+
+kable(head(user_avg_df,10), caption = "User Averages") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+
+
+
+
+
+
+### Movie Averages
+```{r}
+movie_avg <-  colMeans(train[2:8], na.rm = T)
+movie_avg_df <- as.data.frame(movie_avg)
+rownames(movie_avg_df) <- c("Braveheart", "Fight_Club", "Forrest_Gump", "Schindler's_List", "Star_Wars_Episode_IV_A_New_Hope", "Toy_Story", "When_Harry_Met_Sally")
+
+kable(head(movie_avg_df,10), caption = "Movie Averages") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+
+
+
+### Raw averages for train set
+
+For both the train and test sets, I converted them from a data.frame to a matrix while excluding the userid feature. Next, I calculated the mean for the entire matrixes and stored them in variables, train_raw_mean and test_raw_mean. 
+
+```{r}
+train_matrix <- as.matrix(train[2:8])
+train_raw_mean <- mean(train_matrix, na.rm = T)
+train_raw_mean
+```
+### Raw averages for test set
+
+```{r}
+test_matrix <- as.matrix(test[2:8])
+test_raw_mean <-mean(test_matrix, na.rm = T)
+test_raw_mean
+```
+
+## Calculate the RMSE for raw average for both your training data and your test data
+
+In the code block below, I subtracted the raw mean from both the train and test data frames, then squared that result, converted that result to a matrix, took the mean, and finally took the square root of that result. 
+
+I got a train raw RMSE of 0.9528102 and a test raw RMSE of 0.9163092
+
+```{r}
+train_raw_RMSE <- sqrt(mean(as.matrix((train[2:8]-train_raw_mean)^2),na.rm = T))
+train_raw_RMSE
+```
+
+```{r}
+test_raw_RMSE <- sqrt(mean(as.matrix((test[2:8]-test_raw_mean)^2),na.rm = T))
+test_raw_RMSE
+```
+
+
+## Using your training data, calculate the bias for each user and each item.
+
+In the next two code blocks, I subtracted the mean of the train dataset from from the average user and movie means.  
+
+```{r}
+user_bias_df <- user_avg_df-train_raw_mean 
+user_bias_df <- cbind("userId" = rownames(user_bias_df), user_bias_df)
+rownames(user_bias_df) <- NULL
+
+kable(head(user_bias_df,10), caption = "User Biases - Top 10") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+We see that the users in the train set are negatively biased against Braveheart, Toy_Story, and When Harry Met Sally, and they have a positive bias to Schindler's List and Fight Club. 
+
+
+```{r}
+movie_bias_df <- movie_avg_df-train_raw_mean 
+movie_bias_df <- cbind("movie" = rownames(movie_bias_df), movie_bias_df)
+rownames(movie_bias_df) <- NULL
+
+
+kable(head(movie_bias_df,10), caption = "Movie Biases ") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+## From the raw average, and the appropriate user and item biases, calculate the baseline predictorsfor every user-item combination
+
+The function below, create_baseline_predictors_df, takes in an item_bias and user_bias dataframes as well as the raw mean. It then creates and populate a data frame, baseline_predictors_df, with the raw mean plus the user and item biases. Additionally, it forces scores above 5 to be five and scores below 1 to be 1. 
+
+```{r}
+create_baseline_predictors_df <- function(item_Bias, user_Bias, raw_mean){
+        baseline_predictors_df <- data.frame()
+        
+        for (i in 1:nrow(user_Bias)){
+          arry <- c(raw_mean + user_Bias[i,2] + item_Bias[2])
+          arry <- arry[[1]]
+          arry[arry < 1] <- 1.00
+          arry[arry > 5] <- 5.00
+          baseline_predictors_df <- rbind(baseline_predictors_df,arry)
+          }
+        
+        return(baseline_predictors_df)
+  }
+```
+
+
+
+```{r}
+baseline_predictors_df<- create_baseline_predictors_df(movie_bias_df, user_bias_df, train_raw_mean) 
+
+colnames(baseline_predictors_df) <- as.character(movie_bias_df$movie)
+rownames(baseline_predictors_df) <- user_bias_df$userId
+
+kable(head(baseline_predictors_df,10), caption = "Baseline Predictors ") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+## Calculate the RMSE for the baseline predictors for both your training data and your test data
+
+Here, I found something odd.  Even though the RMSE improved for the training set, it got much worse for the test set. 
+
+```{r}
+train_baseline_RMSE<-sqrt(mean((as.matrix(train[2:8] - baseline_predictors_df))^2,na.rm=T))
+train_baseline_RMSE
+```
+
+```{r}
+test_baseline_RMSE<-sqrt(mean((as.matrix(test[2:8] - baseline_predictors_df))^2,na.rm=T))
+test_baseline_RMSE
+```
+
+## Summary
+
+Accounting for usr bias improved the RMSE over using just the raw averages. I saw a 29% improvement of the RMSE.
+
+```{r}
+1 - (train_baseline_RMSE / train_raw_RMSE)
+
+```
+
+However, the same cannot be said for the test set.  Here, I saw a 26% decline in the RMSE from using the raw average to adding in the item-user bias. 
+
+```{r}
+1-(test_baseline_RMSE / test_raw_RMSE)
+```
+
+I don't have a ready explanation as to why, so I checked the movie averages and biases for the test set.  I found that the test set had a stronger negative bias towards "When Harry Met Sally" than the train set.  Also, the train set had a stronger negative bias against Toy Story than the train set. These may account for the train set's RMSE decline. 
+
+```{r}
+movie_avg2 <-  colMeans(test[2:8], na.rm = T)
+movie_avg_df2 <- as.data.frame(movie_avg2)
+rownames(movie_avg_df) <- c("Braveheart", "Fight_Club", "Forrest_Gump", "Schindler's_List", "Star_Wars_Episode_IV_A_New_Hope", "Toy_Story", "When_Harry_Met_Sally")
+
+kable(head(movie_avg_df2,10), caption = "Movie Averages") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
+
+
+```{r}
+test_movie_bias_df <- movie_avg_df2-test_raw_mean 
+test_movie_bias_df <- cbind("movie" = rownames(test_movie_bias_df), test_movie_bias_df)
+rownames(test_movie_bias_df) <- NULL
+
+
+kable(head(test_movie_bias_df,10), caption = "Movie Biases ") %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+
+```
