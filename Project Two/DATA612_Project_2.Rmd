@@ -1,0 +1,533 @@
+---
+title: "DATA612 Project 2"
+author: "John K. Hancock"
+date: "6/11/2020"
+output:
+ 
+  html_document:
+    code_download: yes
+    code_folding: show
+    highlight: pygments
+    number_sections: yes
+    theme: paper
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: no
+---
+
+
+```{r, include=FALSE}
+library(recommenderlab)
+library(ggplot2)
+library(reshape2)
+library(tidyr)
+library(caTools)
+library(kableExtra)
+library(rmdformats)
+```
+
+# Project Scope
+The goal of this assignment is for you to try out different ways of implementing and configuring a recommender, and to evaluate your different approaches.
+
+# Introduction 
+This project builds two recommender systems: User Based Collaborative Filtering (UBCF) and Item Based Collaborative Filtering (ICBF) using data from the MovieLense database. 
+
+The project closely follows the tutorial in chapters 3 and 4 of the text, Building A Recommendation System with R by Suresh K. Gorka and Michele Usuelli. 
+
+
+# Import Data
+
+I began by downing the the MovieLense rating matrix which is within the Recommenderlab R package [Link](https://cran.r-project.org/web/packages/recommenderlab/vignettes/recommenderlab.pdf)
+
+```{r}
+data("MovieLense")
+MovieLense
+```
+
+# Data Exploration
+
+## Similarity of Users and Items
+
+With the imported data, I took the top 100 users and the top 200 movies into an object called "ratings_movies". This object is comprised of 100 users who have rated at least 200 movies.
+
+
+```{r}
+
+ratings_movies <- MovieLense[rowCounts(MovieLense) > 100, colCounts(MovieLense) > 200]
+ratings_movies 
+```
+
+In the code block below, I computed the similarity between the first four users and items in the ratings_movies object using the Pearson similarity method.
+
+```{r}
+similarity_users <- similarity(ratings_movies[1:4, ], method ="pearson", which = "users")
+as.matrix(similarity_users)
+```
+
+```{r}
+image(as.matrix(similarity_users), main = "User similarity")
+```
+
+
+```{r}
+similarity_items <- similarity(ratings_movies[, 1:4], method ="pearson", which = "items")
+as.matrix(similarity_items)
+```
+
+```{r}
+image(as.matrix(similarity_items), main = "Item similarity")
+```
+
+## Exploration of Ratings
+
+The visualization below shows the frequency distribution of ratings after removing those movies without ratings. We see that the rating of "4" is the most often used rating on a scale of 1 to 5. 
+
+```{r}
+vector_ratings <- as.vector(ratings_movies@data)
+vector_ratings <- factor(vector_ratings[vector_ratings !=0])
+vector_ratings_df <- as.data.frame(vector_ratings)
+
+qplot(vector_ratings) + ggtitle("Distribution of the ratings")
+
+
+
+```
+
+```{r}
+views_per_movie <- colCounts(ratings_movies)
+views_per_movie_df <- as.data.frame(views_per_movie)
+views_per_movie_df <- cbind(movies = rownames(views_per_movie_df), views_per_movie_df)
+rownames(views_per_movie_df) <- 1:nrow(views_per_movie_df)
+
+views_per_movie_df  <- views_per_movie_df[order(views_per_movie_df$views_per_movie, decreasing = TRUE), ]
+
+head(views_per_movie_df,5)
+
+```
+
+```{r}
+ggplot(views_per_movie_df[1:5, ], aes(x=movies, y=views_per_movie)) +
+  geom_bar(stat="identity",colour="green", fill="yellow") + theme(axis.text.x =element_text(angle = 45, hjust = 1))
+```
+
+
+
+## Visualization of the top 5 percent of users and movies
+
+In the following sections, we see a Heatmap for the top 5 users and movies, the Average ratings per user, and the Average movie ratings. 
+
+```{r}
+min_movies <- quantile(rowCounts(ratings_movies), 0.95)
+min_users <- quantile(colCounts(ratings_movies), 0.95)
+```
+
+
+
+```{r, fig.width=10, fig.height=7}
+image(ratings_movies[rowCounts(ratings_movies) > min_movies,
+colCounts(ratings_movies) > min_users], main = "Heatmap of the top users and movies")
+```
+
+## Average Ratings per User
+
+
+```{r}
+average_ratings_per_user <- rowMeans(ratings_movies)
+
+p1 <- ggplot() + aes(average_ratings_per_user)+ geom_histogram(binwidth=.05, colour="blue", fill="orange")
+p1
+```
+## Average Movie Ratings
+
+```{r}
+average_movie_ratings<- colMeans(ratings_movies)
+
+p2 <- ggplot() + aes(average_movie_ratings)+ geom_histogram(binwidth=.05, colour="yellow", fill="blue")
+p2
+```
+
+
+# Splitting the Data
+
+I used two different methods for splitting the data. First, I manually created a test and train sets from ratings_movies. Next, I used K-Fold splitting to create 8 different chunks of data where a chunk is taken out, tested, and validated. The same is done with the other chunks and the average accuracy is taken.
+
+
+## Manually Split the Data
+
+```{r}
+set.seed(123)
+which_train <- sample(x = c(TRUE, FALSE), size = nrow(ratings_movies), replace = TRUE, prob = c(0.8, 0.2))
+recc_data_train <- ratings_movies[which_train, ]
+recc_data_test <- ratings_movies[!which_train, ]
+```
+
+
+
+## K-Fold Split
+
+
+```{r}
+n_fold <- 8
+items_to_keep <- 10
+rating_threshold <- 3
+```
+
+
+```{r}
+k_fold_split <- function(data, method, n_fold, items_to_keep, rating_threshold){
+  
+        return(evaluationScheme(data = data, method = method, k = n_fold, given = items_to_keep, goodRating = rating_threshold))
+  
+  }
+```
+
+```{r}
+eval_sets <- k_fold_split(ratings_movies, "cross-validation", n_fold, items_to_keep, rating_threshold) 
+                         
+```
+
+
+```{r}
+size_sets <- sapply(eval_sets@runsTrain, length)
+size_sets
+```
+
+
+
+# Build Models - User Based Collaborative Filtering (UBCF)
+
+## Method One - Using the manual Split
+
+UBCF model was built on the train set, recc_data_train. 
+
+```{r}
+UBCF_recc_model <- Recommender(data = recc_data_train, method = "UBCF")
+UBCF_recc_model
+```
+
+The model recommends 5 movies to each user. 
+
+```{r}
+n_recommended <- 5
+recc_predicted <- predict(object = UBCF_recc_model, newdata = recc_data_test, n = n_recommended)
+UBCF_recc_matrix <- sapply(recc_predicted@items, function(x){
+                                                          colnames(ratings_movies)[x] })
+
+
+```
+
+We can see the slots for the recc_predicted model as well as the predicted user ratings for each film. 
+
+```{r}
+slotNames(recc_predicted)
+```
+```{r}
+recc_predicted@ratings[1:5]
+```
+
+In the table below, we see the names of the five recommmended movies for the top 5 users.
+
+
+```{r, echo=FALSE}
+knitr::kable(UBCF_recc_matrix[, 1:5],"markdown", align = 'c', caption = "UBCF Recommended Movies")
+```
+
+
+```{r}
+number_of_items <- factor(table(UBCF_recc_matrix))
+chart_title <- "Distribution of the number of items for UBCF"
+qplot(number_of_items) + ggtitle(chart_title)
+```
+
+
+## Method Two - using the K-FOld sets
+
+For Method two, I built the UBCF model using the K-fold split data. The custom function, build_UBCF_Model, creates the UBCF recommender model. 
+
+
+```{r}
+build_UBCF_Model <- function(data, model_to_evaluate, model_parameters ){
+    
+                return( Recommender(data = data, method = model_to_evaluate, parameter = model_parameters))
+  }
+```
+
+
+The data used is from the eval sets.  We see that the UBCF_eval_recommender is part of the Recommender package.  
+
+
+
+```{r}
+data <- getData(eval_sets, "train")
+model_to_evaluate <- "UBCF"
+model_parameters <- NULL
+
+UBCF_eval_recommender <- build_UBCF_Model(data,model_to_evaluate,model_parameters) 
+```
+
+```{r}
+class(UBCF_eval_recommender)
+```
+
+```{r}
+UBCF_model_details <- getModel(UBCF_eval_recommender)
+
+```
+
+We see that the data is normalize. 
+
+```{r}
+UBCF_model_details$normalize
+```
+
+
+
+```{r}
+items_to_recommend <- 5
+```
+
+
+```{r}
+UBCF_eval_prediction <- predict(object = UBCF_eval_recommender, newdata = getData(eval_sets, "known"), n = items_to_recommend, type = "ratings")
+
+```
+
+
+## RMSE
+
+I calculated the RMSE, MSE, and MAE both by user and by the entirety of the model. 
+
+```{r}
+UBCF_eval_accuracy_users <- calcPredictionAccuracy(x = UBCF_eval_prediction, data = getData(eval_sets, "unknown"), byUser =TRUE)
+UBCF_eval_accuracy <- calcPredictionAccuracy(x = UBCF_eval_prediction, data = getData(eval_sets, "unknown"), byUser =FALSE)
+```
+
+
+```{r}
+head(UBCF_eval_accuracy_users)
+```
+
+```{r}
+UBCF_eval_accuracy
+```
+
+# Precision and Recall
+
+To further evaluate the UBCF model, I used the evaluate function which tests and validates using the 8 k-fold sets and recommendations starting at 10 to to 100 movies. 
+
+```{r}
+results <- evaluate(x = eval_sets, method = model_to_evaluate, n =seq(10, 100, 10))
+
+```
+
+```{r}
+getConfusionMatrix(results)[[1]]
+```
+
+```{r}
+columns_to_sum <- c("TP", "FP", "FN", "TN")
+indices_summed <- Reduce("+", getConfusionMatrix(results))[, columns_to_sum]
+indices_summed
+```
+
+## The ROC curve
+
+Shows the relationship between the True Positive Rate (TPR) and the False Positive Rate (FPR). The TPR is the number of TP divided by the sum of True Positives(TP) + False Negatives(FN).  This rate shows whether the recommdended item was rated by the user. The FPR is the number of FP divided by the sum of False Positives(TP) + True Negatives(FN). FPR measures recommendations that were not rated by the user. 
+
+
+
+```{r}
+plot(results, annotate = TRUE, main = "ROC curve")
+```
+
+Precision is  the percentage of recommended items that have been rated. It's the number of FP divided by the sum of (TP + FP). Recall is the percentage of user rated movies that have been
+recommended. It's the number of TP divided by the sum of (TP + FN).
+
+We can see clearly in the chart below that as the number of recommended movies increases, Precision falls but Recall increases. 
+
+
+
+```{r}
+plot(results, "prec/rec", annotate = TRUE, main = "Precision-recall")
+```
+
+
+# Build Models - Item Based Collaborative Filtering (IBCF)
+
+For the Item Based Collaborative Filtering, I followed the exact same steps as for the User Based Collaborative Filtering (UBCF). 
+
+## Method One - Using the manual Split
+
+```{r}
+IBCF_recc_model <- Recommender(data = recc_data_train, method = "IBCF")
+IBCF_recc_model
+```
+
+```{r}
+n_recommended <- 5
+recc_predicted <- predict(object = IBCF_recc_model, newdata = recc_data_test, n = n_recommended)
+IBCF_recc_matrix <- sapply(recc_predicted@items, function(x){
+                                                          colnames(ratings_movies)[x]
+                                                          })
+```
+
+
+```{r, echo=FALSE}
+knitr::kable(IBCF_recc_matrix[, 1:5],"markdown", align = 'c', caption = "UBCF Recommended Movies")
+```
+
+
+
+```{r}
+number_of_items <- factor(table(UBCF_recc_matrix))
+chart_title <- "Distribution of the number of items for IBCF"
+qplot(number_of_items) + ggtitle(chart_title)
+```
+
+
+
+
+## Method Two - using the K-FOld sets
+
+
+```{r}
+build_IBCF_Model <- function(data, model_to_evaluate, model_parameters ){
+    
+                return( Recommender(data = data, method = model_to_evaluate, parameter = model_parameters))
+  }
+```
+
+
+```{r}
+data <- getData(eval_sets, "train")
+model_to_evaluate <- "IBCF"
+model_parameters <- NULL
+IBCF_eval_recommender <- build_IBCF_Model(data,model_to_evaluate,model_parameters) 
+```
+
+```{r}
+IBCF_eval_recommender
+```
+
+
+```{r}
+items_to_recommend <- 5
+```
+
+
+```{r}
+IBCF_eval_prediction <- predict(object = IBCF_eval_recommender, newdata = getData(eval_sets, "known"), 
+                           n = items_to_recommend, type = "ratings")
+class(IBCF_eval_prediction)
+```
+
+
+```{r}
+number_of_items <- factor(table(IBCF_recc_matrix))
+chart_title <- "Distribution of the number of items for IBCF"
+```
+
+```{r}
+qplot(number_of_items) + ggtitle(chart_title)
+```
+
+## RMSE
+
+```{r}
+IBCF_eval_accuracy_users <- calcPredictionAccuracy(x = IBCF_eval_prediction, data = getData(eval_sets, "unknown"), 
+                                        byUser =TRUE)
+
+IBCF_eval_accuracy <- calcPredictionAccuracy(x = IBCF_eval_prediction, data = getData(eval_sets, "unknown"), 
+                                        byUser =FALSE)
+
+```
+
+
+
+```{r}
+head(IBCF_eval_accuracy_users)
+```
+
+```{r}
+qplot(IBCF_eval_accuracy_users[, "RMSE"]) + geom_histogram(binwidth = 0.125) +
+ggtitle("Distribution of the RMSE by user")
+```
+
+
+```{r}
+IBCF_eval_accuracy
+```
+
+
+# Precision and Recall
+
+
+```{r}
+results <- evaluate(x = eval_sets, method = model_to_evaluate, n =seq(10, 100, 10))
+
+```
+
+```{r}
+head(getConfusionMatrix(results)[[1]])
+```
+
+```{r}
+plot(results, annotate = TRUE, main = "ROC curve")
+```
+
+```{r}
+plot(results, "prec/rec", annotate = TRUE, main = "Precision-recall")
+```
+
+# Summary
+
+So which model, the UBCF or the IBCF, performed better? We see that the two models recommended entirely different sets of movies to the first five users. 
+
+
+```{r, echo=FALSE}
+knitr::kable(UBCF_recc_matrix[, 1:5],"markdown", align = 'c', caption = "UBCF Recommended Movies")
+```
+
+```{r, echo=FALSE}
+knitr::kable(IBCF_recc_matrix[, 1:5],"markdown", align = 'c', caption = "UBCF Recommended Movies")
+```
+
+## Evaluation of models
+
+To evaluate the two models, I created a list of UBCF and IBCF models with different parameters (pearson and cosine). This list was fed into the evaluate function and below. The visualizations below both show that the UBCF using the "pearson" method had the larger area under the curve. 
+
+In conclusion, this project has shown that if we want our model to be more precise with its recommendations, we would choose the UBCF model and recommend five or less movies. If the number of recommendations is 50 or above, then the UBCF-pearson model does not perform better than the other models. 
+
+
+```{r}
+models_to_evaluate <- list(IBCF_cos = list(name = "IBCF", param = list(method ="cosine")),
+IBCF_cor = list(name = "IBCF", param = list(method ="pearson")),
+UBCF_cos = list(name = "UBCF", param = list(method ="cosine")),
+UBCF_cor = list(name = "UBCF", param = list(method ="pearson")),
+random = list(name = "RANDOM", param=NULL)
+)
+
+n_recommendations <- c(1, 5, seq(10, 100, 10))
+```
+
+
+
+```{r}
+compare_results <- evaluate(x = eval_sets, method = models_to_evaluate, n= n_recommendations)
+```
+
+```{r}
+plot(compare_results, annotate = 1, legend = "topleft") + title("ROC curve")
+```
+
+```{r}
+plot(compare_results, "prec/rec", annotate = 1, legend = "bottomright")
+title("Precision-recall")
+```
+
+
+
+
+
+
